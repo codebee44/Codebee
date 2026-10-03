@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Bee</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+body{margin:0;font-family:sans-serif;background:#fafafa;color:#222}
+header{position:sticky;top:0;z-index:5;background:#fff;padding:12px;border-bottom:1px solid #ddd;display:flex;align-items:center;gap:10px}
+.av{width:36px;height:36px;border-radius:50%;background:#f5b700;display:flex;align-items:center;justify-content:center;font-weight:bold;overflow:hidden;flex-shrink:0}
+.av img{width:100%;height:100%}
+.new{padding:12px;background:#fff;border-bottom:1px solid #ddd}
+.new input[type=text]{width:100%;box-sizing:border-box;padding:8px;margin-bottom:8px}
+.row{display:flex;gap:8px;align-items:center}
+.pick{padding:8px 12px;border-radius:6px;background:#eee;cursor:pointer}
+button{padding:8px 12px;border:0;border-radius:6px;background:#f5b700}
+.post{background:#fff;margin:10px 0;padding:12px}
+.who{display:flex;align-items:center;gap:8px;font-weight:bold;margin-bottom:8px}
+.post video,.post img.m{width:100%;max-height:420px;object-fit:contain;background:#000;margin-top:8px;border-radius:6px}
+.cm{font-size:14px;margin:4px 0}
+.act{margin:8px 0;font-size:18px}
+#fn{font-size:12px;color:#666}
+</style>
+</head>
+<body>
+<header><div class="av" id="me"></div><b id="name"></b></header>
+<div class="new">
+  <input type="text" id="txt" placeholder="Nima yangilik?">
+  <div class="row">
+    <label class="pick">📎 Rasm/Video<input type="file" id="file" accept="image/*,video/*" hidden></label>
+    <span id="fn"></span>
+    <button id="postBtn" onclick="addPost()" style="margin-left:auto">Joylash</button>
+  </div>
+</div>
+<div id="feed">Yuklanmoqda...</div>
+<script>
+const BASE = "https://ackrvmuxorekfaryhexz.supabase.co";
+const KEY = "sb_publishable_N-AKSUXL8scbZ_gn07FKgA_AuO6116I";
+const H = {apikey: KEY, "Content-Type": "application/json", Prefer: "return=minimal"};
+
+const tg = window.Telegram.WebApp; tg.ready();
+const u = tg.initDataUnsafe?.user || {first_name:"Mehmon", id:0};
+const myName = u.first_name, myId = u.id;
+document.getElementById("name").textContent = myName;
+document.getElementById("me").innerHTML = u.photo_url ? `<img src="${u.photo_url}">` : myName[0];
+
+let posts = [], likes = [], comments = [];
+
+document.getElementById("file").onchange = e => {
+  const f = e.target.files[0];
+  document.getElementById("fn").textContent = f ? f.name.slice(0,18) : "";
+};
+
+async function api(path, opt){
+  const r = await fetch(BASE + "/rest/v1" + path, opt ? {...opt, headers: H} : {headers: H});
+  if(!r.ok){ console.log("Xato:", await r.text()); return null; }
+  return opt ? true : r.json();
+}
+async function load(){
+  posts = await api("/posts?select=*&order=created_at.desc") || [];
+  likes = await api("/likes?select=post_id,tg_id") || [];
+  comments = await api("/comments?select=*&order=created_at.asc") || [];
+  render();
+}
+async function upload(file){
+  const ext = (file.name.split(".").pop() || "bin").replace(/[^a-z0-9]/gi,"").toLowerCase();
+  const name = Date.now() + "_" + Math.random().toString(36).slice(2,8) + "." + ext;
+  const r = await fetch(`${BASE}/storage/v1/object/media/${name}`, {
+    method: "POST",
+    headers: {apikey: KEY, "Content-Type": file.type || "application/octet-stream"},
+    body: file
+  });
+  if(!r.ok){ console.log("Yuklash xatosi:", await r.text()); return null; }
+  return `${BASE}/storage/v1/object/public/media/${name}`;
+}
+async function addPost(){
+  const t = document.getElementById("txt");
+  const fi = document.getElementById("file");
+  const btn = document.getElementById("postBtn");
+  const file = fi.files[0];
+  if(!t.value.trim() && !file) return;
+  if(file && file.size > 50*1024*1024){ alert("Fayl 50 MB dan katta"); return; }
+  btn.disabled = true; btn.textContent = "Yuklanmoqda...";
+  let media_url = null, media_type = null;
+  if(file){
+    media_url = await upload(file);
+    if(!media_url){ alert("Fayl yuklanmadi"); btn.disabled = false; btn.textContent = "Joylash"; return; }
+    media_type = file.type.startsWith("video") ? "video" : "image";
+  }
+  await api("/posts", {method:"POST", body: JSON.stringify({tg_id: myId, name: myName, text: t.value, media_url, media_type})});
+  t.value = ""; fi.value = ""; document.getElementById("fn").textContent = "";
+  btn.disabled = false; btn.textContent = "Joylash";
+  load();
+}
+async function like(id){
+  const has = likes.some(l => l.post_id === id && l.tg_id === myId);
+  if(has) await api(`/likes?post_id=eq.${id}&tg_id=eq.${myId}`, {method:"DELETE"});
+  else await api("/likes", {method:"POST", body: JSON.stringify({post_id: id, tg_id: myId})});
+  load();
+}
+async function comment(id){
+  const el = document.getElementById("c"+id);
+  if(!el.value.trim()) return;
+  await api("/comments", {method:"POST", body: JSON.stringify({post_id: id, tg_id: myId, name: myName, text: el.value})});
+  load();
+}
+function esc(s){return String(s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function mediaHtml(p){
+  if(!p.media_url) return "";
+  const src = esc(p.media_url);
+  return p.media_type === "video"
+    ? `<video controls playsinline preload="metadata" src="${src}"></video>`
+    : `<img class="m" src="${src}">`;
+}
+function render(){
+  document.getElementById("feed").innerHTML = posts.map(p=>{
+    const pl = likes.filter(l=>l.post_id===p.id);
+    const mine = pl.some(l=>l.tg_id===myId);
+    return `<div class="post">
+      <div class="who"><div class="av">${esc(p.name[0])}</div>${esc(p.name)}</div>
+      <div>${esc(p.text)}</div>
+      ${mediaHtml(p)}
+      <div class="act"><span onclick="like(${p.id})">${mine?"❤️":"🤍"}</span> ${pl.length}</div>
+      ${comments.filter(c=>c.post_id===p.id).map(c=>`<div class="cm"><b>${esc(c.name)}</b> ${esc(c.text)}</div>`).join("")}
+      <input id="c${p.id}" placeholder="Komment..." style="width:65%;padding:6px">
+      <button onclick="comment(${p.id})">Yuborish</button>
+    </div>`}).join("") || "Hali post yo'q. Birinchisini yozing! 🐝";
+}
+load();
+</script>
+</body>
+</html>
